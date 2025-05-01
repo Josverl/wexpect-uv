@@ -3,34 +3,36 @@ application. These host classes (and some util classes) are the interface for th
 modules as protected.
 """
 
-import time
-import sys
+import logging
 import os
-import shutil
 import re
-import traceback
-import types
-import psutil
+import shutil
 import signal
 import socket
-import logging
+import sys
+import time
+import traceback
+import types
 
+import psutil
 import pywintypes
-import win32process
 import win32con
 import win32file
-import winerror
 import win32pipe
+import win32process
+import winerror
 
-from .wexpect_util import ExceptionPexpect
-from .wexpect_util import EOF
-from .wexpect_util import TIMEOUT
-from .wexpect_util import split_command_line
-from .wexpect_util import join_args
-from .wexpect_util import init_logger
-from .wexpect_util import EOF_CHAR
-from .wexpect_util import SIGNAL_CHARS
-from .wexpect_util import generate_id
+from .wexpect_util import (
+    EOF,
+    EOF_CHAR,
+    SIGNAL_CHARS,
+    TIMEOUT,
+    ExceptionPexpect,
+    generate_id,
+    init_logger,
+    join_args,
+    split_command_line,
+)
 
 logger = logging.getLogger('wexpect')
 
@@ -203,6 +205,10 @@ class SpawnBase:
         # searchwindowsize: Anything before searchwindowsize point is preserved, but not searched.
         self.searchwindowsize = searchwindowsize
         self.interact_state = interact
+        # logging
+        self.logfile = logfile
+        self.logfile_read = kwargs.get('logfile_read', None)
+        self.logfile_send = kwargs.get('logfile_send', None)
 
         logger.info(f'Spawn started. location {os.path.abspath(__file__)}')
 
@@ -290,6 +296,19 @@ class SpawnBase:
         s.append('delaybeforesend: ' + str(self.delaybeforesend))
         s.append('delayafterterminate: ' + str(self.delayafterterminate))
         return '\n'.join(s)
+    
+    def _log(self, s:bytes | str, direction):
+        if isinstance(s, str):
+            txt = s.replace("\r\n", "\n")
+        else:
+            txt = s.replace(b"\r\n", b"\n")
+        if self.logfile is not None:
+            self.logfile.write(txt)
+            self.logfile.flush()
+        second_log = self.logfile_send if (direction=='send') else self.logfile_read
+        if second_log is not None:
+            second_log.write(txt)
+            second_log.flush()
 
     def startChild(self, args, env):
         '''Start the console process.
@@ -588,6 +607,8 @@ class SpawnBase:
     def send(self, s, delaybeforesend=None):
         """Virtual definition
         """
+        if s:
+            self._log(s, 'send')
         if self.flag_eof:
             logger.info('EOF: End of file has been already detected.')
             raise EOF('End of file has been already detected.')
@@ -877,7 +898,7 @@ class SpawnPipe(SpawnBase):
         super().__init__(
             command=command, args=args, timeout=timeout, maxread=maxread,
             searchwindowsize=searchwindowsize, cwd=cwd, env=env, codepage=codepage, echo=echo,
-            interact=interact, **kwargs)
+            interact=interact,logfile=logfile, **kwargs)
 
         # Sets delay in terminate() method to allow kernel time to update process status. Time in
         # seconds.
@@ -942,6 +963,7 @@ class SpawnPipe(SpawnBase):
             s = win32file.ReadFile(self.pipe, size)[1]
 
             if s:
+                self._log(s, 'read')
                 logger.debug(f'Readed: {s}')
             else:
                 logger.spam(f'Readed: {s}')
@@ -1062,6 +1084,7 @@ class SpawnSocket(SpawnBase):
             s = self.sock.recv(size)
 
             if s:
+                self._log(s, 'read')
                 logger.debug(f'Readed: {s}')
             else:
                 logger.spam(f'Readed: {s}')
